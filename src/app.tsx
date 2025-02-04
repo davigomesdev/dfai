@@ -21,7 +21,10 @@ const App: React.FC = () => {
   return (
     <main>
       <Wrapper className="flex flex-col items-center overflow-hidden">
-        <img className="absolute top-0 -z-10 w-screen min-w-[800px]" src="/banner.png" />
+        <img
+          className="absolute top-0 -z-10 w-screen min-w-[800px] 2xl:-top-64"
+          src="/banner.png"
+        />
         <Navbar />
         <Container className="flex h-[calc(100vh-300px)] w-full">
           <div className="flex w-full max-w-[400px] flex-col justify-center gap-4">
