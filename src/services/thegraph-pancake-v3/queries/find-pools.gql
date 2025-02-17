@@ -1,0 +1,32 @@
+query FindPools($tokenA: String, $tokenB: String, $startDate: Int, $endDate: Int) {
+  pools(where: { token0_in: [$tokenA, $tokenB], token1_in: [$tokenA, $tokenB] }, orderBy: feeTier) {
+    id
+    feeTier
+    feesUSD
+    volumeUSD
+    liquidity
+    totalValueLockedUSD
+    token0 {
+      id
+      symbol
+      decimals
+    }
+    token1 {
+      id
+      symbol
+      decimals
+    }
+    token0Price
+    token1Price
+    poolDayData(
+      where: { date_gte: $startDate, date_lte: $endDate }
+      orderBy: date
+      orderDirection: desc
+    ) {
+      tvlUSD
+      feesUSD
+      volumeUSD
+      date
+    }
+  }
+}

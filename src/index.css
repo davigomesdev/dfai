@@ -51,6 +51,16 @@
   font-style: normal;
 }
 
+@keyframes blink {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0;
+  }
+}
+
 * {
   box-sizing: border-box;
   font-family: "RigidSquare", sans-serif !important;
@@ -68,4 +78,27 @@ a {
 body {
   background-color: black;
   overflow-x: hidden;
+}
+
+.animate-blink {
+  animation: blink 1s infinite;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: none;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #30284B;
+  border-radius: 6px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #47405F;
 }
