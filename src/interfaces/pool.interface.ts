@@ -22,5 +22,6 @@ export interface IPoolDayData {
   tvlUSD: string;
   feesUSD: string;
   volumeUSD: string;
+  liquidity: string;
   date: number;
 }

@@ -4,17 +4,19 @@ import { IPool } from '@/interfaces/pool.interface';
 import { IToken } from '@/interfaces/token.interface';
 
 import * as ERC20Service from '@/services/erc20/erc20.service';
+import * as PancakeV3Factory from '@/services/pancake-v3-factory/pancake-v3-factory.service';
 import * as ThegraphPancakeV3Service from '@/services/thegraph-pancake-v3/thegraph-pancake-v3.service';
 
 import { getParams } from '@/utils/url.util';
 import { balanceOfEther } from '@/utils/ethers.util';
 import { subDays, getTime } from 'date-fns';
+import { ethers, formatUnits, parseUnits } from 'ethers';
 import { formatTruncateDecimal, truncateToDecimals } from '@/utils/format.util';
-import { formatUnits, parseUnits } from 'ethers';
 
 import useSWR from 'swr';
 import { useToast } from '@/hooks/use-toast';
 import { useTokens } from '@/hooks/use-tokens';
+import { useWeb3ModalAccount } from '@web3modal/ethers/react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { ArrowRightLeft, ChevronDown, Minus, Plus } from 'lucide-react';
@@ -27,8 +29,8 @@ import Separator from '@/components/common/separator';
 import PriceChart from '@/components/charts/price-chart';
 import Typography from '@/components/common/typography';
 import DefaultIcon from '@/components/partials/default-icon';
-import TypingLoader from '@/components/partials/typing-loader';
-import LiquidityChart from '@/components/charts/liquidity-chart';
+import TypingLoader from '@/components/common/typing-loader';
+import LiquidityChart from '@/components/charts/liquidity-chart-temp';
 import ListTokensDialog from '@/components/dialogs/list-tokens-dialog';
 
 const dataPrices = [
@@ -61,13 +63,16 @@ const dataLiquidity = [
   { month: 'June', field: 214 },
 ];
 
-const CreatePosition: React.FC = () => {
-  const paramTokenA = 'tokenA';
-  const paramTokenB = 'tokenB';
-  const paramPoolTier = 'poolTier';
+const paramTokenA = 'tokenA';
+const paramTokenB = 'tokenB';
+const paramPoolTier = 'poolTier';
 
+const fees = [100, 500, 2500, 10000];
+
+const CreatePosition: React.FC = () => {
   const { toast } = useToast();
   const { findToken } = useTokens();
+  const { address } = useWeb3ModalAccount();
 
   const [searchParams] = useSearchParams();
   const params = getParams(searchParams);
@@ -88,24 +93,44 @@ const CreatePosition: React.FC = () => {
     async () => {
       if (!tokenA || !tokenB) return null;
 
+      const pools: IPool[] = [];
+      const poolIds: string[] = [];
+
+      for (const fee of fees) {
+        const address = await PancakeV3Factory.getPool({
+          tokenA: tokenA.address.toLowerCase(),
+          tokenB: tokenB.address.toLowerCase(),
+          fee,
+        });
+
+        if (address !== ethers.ZeroAddress) {
+          poolIds.push(address.toLowerCase());
+        }
+      }
+
       const currentDate = new Date();
       const pastDate = subDays(currentDate, 30);
 
       const startDate = Math.floor(getTime(pastDate) / 1000);
       const endDate = Math.floor(getTime(currentDate) / 1000);
 
-      return await ThegraphPancakeV3Service.findPools({
-        tokenA: tokenA.address.toLowerCase(),
-        tokenB: tokenB.address.toLowerCase(),
-        startDate,
-        endDate,
-      });
+      for (const id of poolIds) {
+        const pool = await ThegraphPancakeV3Service.findPool({
+          id,
+          startDate,
+          endDate,
+        });
+
+        pools.push(pool);
+      }
+
+      return pools;
     },
-    { errorRetryCount: 0 },
+    { errorRetryCount: 3 },
   );
 
-  const { data: balances } = useSWR<[bigint, bigint]>(
-    `balances/${tokenA?.id}/${tokenB?.id}`,
+  const { data: balances = [0n, 0n] } = useSWR<[bigint, bigint]>(
+    `balances/${address}/${tokenA?.id}/${tokenB?.id}`,
     async () => {
       if (!tokenA || !tokenB) return [0n, 0n];
 
@@ -120,7 +145,7 @@ const CreatePosition: React.FC = () => {
       return [balanceA, balanceB];
     },
     {
-      errorRetryCount: 0,
+      errorRetryCount: 3,
     },
   );
 
@@ -183,23 +208,16 @@ const CreatePosition: React.FC = () => {
     const oneHundred = BigInt(10000);
 
     const newPrice = (priceBigInt * (oneHundred + incrementFactor)) / oneHundred;
-
     return formatUnits(newPrice, 18);
   };
 
-  // Função para decrementar o preço
   const handleOnClickDecrementPrice = (price: string, decrementPercentage: number): string => {
-    // Converte o preço para BigInt (assumindo que o preço está em ether)
     const priceBigInt = parseUnits(price, 18);
 
-    // Calcula o decremento
-    const decrementFactor = BigInt(Math.floor(decrementPercentage * 100)); // Multiplica por 100 para evitar decimais
-    const oneHundred = BigInt(10000); // 100 * 100 para manter a precisão
+    const decrementFactor = BigInt(Math.floor(decrementPercentage * 100));
+    const oneHundred = BigInt(10000);
 
-    // Calcula o novo preço
     const newPrice = (priceBigInt * (oneHundred - decrementFactor)) / oneHundred;
-
-    // Converte o novo preço de volta para ether
     return formatUnits(newPrice, 18);
   };
 
@@ -263,7 +281,7 @@ const CreatePosition: React.FC = () => {
     }
   }, [params]);
 
-  const [balanceTokenA, balanceTokenB] = balances ?? [0n, 0n];
+  const [balanceTokenA, balanceTokenB] = balances;
 
   const { maxValue, minValue } = React.useMemo(() => {
     const values = dataPrices.map((item) => item.field);
@@ -284,7 +302,7 @@ const CreatePosition: React.FC = () => {
       <section className="w-full max-w-screen-lg space-y-12 p-5">
         <Card>
           <Card.Header>
-            <Card.Title>Select network and exchange</Card.Title>
+            <Card.Title>Select tokens</Card.Title>
             <Card.Description>Select pair of tokens to provide liquidity for</Card.Description>
           </Card.Header>
           <Card.Content className="flex gap-10">
@@ -334,8 +352,13 @@ const CreatePosition: React.FC = () => {
         {tokenA && tokenB ? (
           isLoading ? (
             <Card>
-              <Card.Content className="p-10">
-                <TypingLoader />
+              <Card.Content className="space-y-2 p-10">
+                <div className="w-full rounded-md bg-gradient-to-r from-secondary-950 to-secondary-950/0 p-4">
+                  <TypingLoader text="Fetching pool data" />
+                  <TypingLoader text="Fetching pool period data" />
+                  <TypingLoader text="Fetching pool tier data" />
+                  <TypingLoader text="Loading pool tier..." />
+                </div>
               </Card.Content>
             </Card>
           ) : pools?.length ? (
@@ -529,9 +552,6 @@ const CreatePosition: React.FC = () => {
                   </li>
                 </ul>
               </Card.Content>
-              <Card.Footer className="border-t border-secondary-800 bg-secondary-950 py-5">
-                <Card.Description>Make sure you choose the correct liquidity pair</Card.Description>
-              </Card.Footer>
             </Card>
             <Card>
               <Card.Header>
@@ -585,9 +605,6 @@ const CreatePosition: React.FC = () => {
                   </div>
                 </div>
               </Card.Content>
-              <Card.Footer className="border-t border-secondary-800 bg-secondary-950 py-5">
-                <Card.Description>Make sure you choose the correct liquidity pair</Card.Description>
-              </Card.Footer>
             </Card>
             <Card>
               <Card.Header>
@@ -625,8 +642,7 @@ const CreatePosition: React.FC = () => {
                   </Card.Content>
                 </Card>
               </Card.Content>
-              <Card.Footer className="flex items-center justify-between border-t border-secondary-800 bg-secondary-950 py-5">
-                <Card.Description>Make sure you choose the correct liquidity pair</Card.Description>
+              <Card.Footer className="flex items-center justify-end border-t border-secondary-800 bg-secondary-950 py-5">
                 <div className="space-x-4">
                   {!tokenA?.isNative ? (
                     <Button variant="outline">{`Approve ${tokenA?.symbol}`}</Button>

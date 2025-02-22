@@ -1,4 +1,4 @@
-export interface FindPoolDTO {
+export interface FindPoolDayDataDTO {
   id: string;
   startDate: number;
   endDate: number;

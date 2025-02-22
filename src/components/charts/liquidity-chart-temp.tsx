@@ -4,10 +4,10 @@ import React from 'react';
 
 import { colors } from '@/constants/colors';
 
-import { Area, AreaChart, XAxis, YAxis, ReferenceLine } from 'recharts';
+import { XAxis, ReferenceLine, BarChart, Bar } from 'recharts';
 
-import Typography from '../common/typography';
 import Chart, { ChartConfig } from '../common/chart';
+import Typography from '../common/typography';
 
 const config = {
   field: {
@@ -21,9 +21,10 @@ interface PriceChartProps {
   data: { month: string; field: number }[];
 }
 
-const PriceChart = React.memo<PriceChartProps>(({ minPrice, maxPrice, data }) => (
+const LiquidityChart = React.memo<PriceChartProps>(({ minPrice, maxPrice, data }) => (
   <Chart className="max-h-[155px] min-h-[130px] w-full" config={config}>
-    <AreaChart
+    <BarChart
+      barCategoryGap={3}
       data={data}
       margin={{
         left: 12,
@@ -31,14 +32,7 @@ const PriceChart = React.memo<PriceChartProps>(({ minPrice, maxPrice, data }) =>
         top: 15,
       }}
     >
-      <Area
-        dataKey="field"
-        fill="var(--color-field)"
-        fillOpacity={0.05}
-        stroke="var(--color-field)"
-        strokeWidth={2}
-        type="linear"
-      />
+      <Bar dataKey="field" fill="var(--color-field)" />
       <XAxis
         axisLine={{ stroke: colors.secondary[400], strokeWidth: 1 }}
         dataKey="month"
@@ -47,13 +41,26 @@ const PriceChart = React.memo<PriceChartProps>(({ minPrice, maxPrice, data }) =>
         tickLine={false}
         tickMargin={2}
       />
-      <YAxis
-        axisLine={false}
-        orientation="right"
-        tick={{ fontSize: 9, fill: colors.secondary[400] }}
-        tickCount={5}
-        tickLine={false}
-        tickMargin={0}
+      <ReferenceLine
+        isFront
+        label={{
+          content: (props: any) => (
+            <foreignObject
+              height={40}
+              width={100}
+              x={props.viewBox.x - 30}
+              y={props.viewBox.y - 10}
+            >
+              <Typography.P className="inline-block rounded-sm bg-primary-500 px-[6px] text-[10px] font-bold text-secondary-950">
+                MIN: {minPrice}
+              </Typography.P>
+            </foreignObject>
+          ),
+        }}
+        stroke="#FFE600"
+        strokeDasharray="3 3"
+        strokeWidth={2}
+        x={0}
       />
       <ReferenceLine
         isFront
@@ -62,8 +69,8 @@ const PriceChart = React.memo<PriceChartProps>(({ minPrice, maxPrice, data }) =>
             <foreignObject
               height={40}
               width={100}
-              x={props.viewBox.x + 10}
-              y={props.viewBox.y - 15}
+              x={props.viewBox.x - 30}
+              y={props.viewBox.y - 10}
             >
               <Typography.P className="inline-block rounded-sm bg-primary-500 px-[6px] text-[10px] font-bold text-secondary-950">
                 MAX: {maxPrice}
@@ -74,26 +81,10 @@ const PriceChart = React.memo<PriceChartProps>(({ minPrice, maxPrice, data }) =>
         stroke="#FFE600"
         strokeDasharray="3 3"
         strokeWidth={2}
-        y={maxPrice}
+        x={5}
       />
-      <ReferenceLine
-        isFront
-        label={{
-          content: (props: any) => (
-            <foreignObject height={40} width={100} x={props.viewBox.x + 10} y={props.viewBox.y - 2}>
-              <Typography.P className="inline-block rounded-sm bg-primary-500 px-[6px] text-[10px] font-bold text-secondary-950">
-                MIN: {minPrice}
-              </Typography.P>
-            </foreignObject>
-          ),
-        }}
-        stroke="#FFE600"
-        strokeDasharray="3 3"
-        strokeWidth={2}
-        y={minPrice}
-      />
-    </AreaChart>
+    </BarChart>
   </Chart>
 ));
 
-export default PriceChart;
+export default LiquidityChart;

@@ -13,7 +13,7 @@ import Card from '@/components/common/card';
 import DataGrid from '@/components/common/data-grid';
 import Pagination from '@/components/common/pagination';
 import Typography from '@/components/common/typography';
-import TypingLoader from '@/components/partials/typing-loader';
+import TypingLoader from '@/components/common/typing-loader';
 
 const TopPositions: React.FC = () => {
   const currentPage = 1;
@@ -67,7 +67,9 @@ const TopPositions: React.FC = () => {
           {isLoading ? (
             <Card className="mt-2">
               <Card.Content className="p-10">
-                <TypingLoader />
+                <div className="w-full rounded-md bg-gradient-to-r from-secondary-900 to-secondary-950/0 p-2 px-4">
+                  <TypingLoader text="Fetching LP positions" />
+                </div>
               </Card.Content>
             </Card>
           ) : (

@@ -1,0 +1,16 @@
+query FindPoolDayData($id: String, $startDate: Int, $endDate: Int) {
+  pools(where: { id: $id }) {
+    id
+    poolDayData(
+      where: { date_gte: $startDate, date_lte: $endDate }
+      orderBy: date
+      orderDirection: desc
+    ) {
+      tvlUSD
+      feesUSD
+      volumeUSD
+      liquidity
+      date
+    }
+  }
+}

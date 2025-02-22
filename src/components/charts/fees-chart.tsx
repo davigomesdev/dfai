@@ -22,15 +22,15 @@ import Chart, { ChartConfig } from '../common/chart';
 
 const config = {
   field: {
-    color: colors.primary[500],
+    color: '#22c55e',
   },
 } satisfies ChartConfig;
 
-interface LiquidityChartProps {
+interface FeesChartProps {
   id: string;
 }
 
-const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
+const FeesChart = React.memo<FeesChartProps>(({ id }) => {
   const [days, setDays] = React.useState<number>(30);
 
   const { data: poolDayData, isLoading } = useSWR<IPoolDayData[]>(
@@ -56,7 +56,7 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
   };
 
   const data = React.useMemo(() => {
-    const liquidityPerDays = (field: keyof IPoolDayData): { field: number }[] => {
+    const feesPerDays = (field: keyof IPoolDayData): { field: number }[] => {
       const dates = Array.from({ length: days }, (_, i) => {
         return startOfDay(subDays(new Date(), i)).getTime();
       });
@@ -91,12 +91,12 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
       return normalizedData.reverse();
     };
 
-    const liquidityTotal = (): number =>
-      poolDayData?.reduce((total, day) => total + parseFloat(day.liquidity), 0) ?? 0;
+    const feesTotal = (): number =>
+      poolDayData?.reduce((total, day) => total + parseFloat(day.feesUSD), 0) ?? 0;
 
     return {
-      liquidityTotal: liquidityTotal(),
-      liquidityPerDays: liquidityPerDays('liquidity'),
+      feesTotal: feesTotal(),
+      feesPerDays: feesPerDays('feesUSD'),
     };
   }, [poolDayData, days]);
 
@@ -104,9 +104,9 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
     <div className="w-full">
       <div className="flex w-full justify-between gap-2 p-3">
         <div>
-          <Typography.P className="text-xs text-secondary-200">Total liquidity</Typography.P>
+          <Typography.P className="text-xs text-secondary-200">Total fees</Typography.P>
           <Typography.H4>
-            {isLoading ? 'Loading...' : numeral(data.liquidityTotal).format('0.00a')}
+            {isLoading ? 'Loading...' : numeral(data.feesTotal).format('0.00a')}
           </Typography.H4>
         </div>
         <div className="flex gap-2">
@@ -148,7 +148,7 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
         <AreaChart
           accessibilityLayer
           barCategoryGap={3}
-          data={data.liquidityPerDays}
+          data={data.feesPerDays}
           margin={{
             left: 12,
             right: 12,
@@ -167,7 +167,7 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
             fillOpacity={0.2}
             stroke="var(--color-field)"
             strokeWidth={2}
-            type="natural"
+            type="step"
           />
         </AreaChart>
       </Chart>
@@ -175,4 +175,4 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
   );
 });
 
-export default LiquidityChart;
+export default FeesChart;

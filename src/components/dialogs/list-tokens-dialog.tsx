@@ -61,6 +61,8 @@ const ListTokensDialog: React.FC<ListTokensDialog> = ({ param, children }) => {
     }
 
     params.set(param, id);
+    params.delete('poolTier');
+
     const newPath = `${location.pathname}?${params.toString()}`;
 
     navigate(newPath);
@@ -115,7 +117,9 @@ const ListTokensDialog: React.FC<ListTokensDialog> = ({ param, children }) => {
                 <TokenItem
                   key={index}
                   {...token}
-                  onClick={() => handleOnClickTokenItem(token.id)}
+                  onClick={() => {
+                    handleOnClickTokenItem(token.id);
+                  }}
                 />
               ))}
               {importResult ? (

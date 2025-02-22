@@ -14,7 +14,7 @@ import { fromUnixTime, getTime, startOfDay, subDays } from 'date-fns';
 
 import useSWR from 'swr';
 
-import { Area, AreaChart, CartesianGrid } from 'recharts';
+import { BarChart, Bar, CartesianGrid } from 'recharts';
 
 import Button from '../common/button';
 import Typography from '../common/typography';
@@ -26,11 +26,11 @@ const config = {
   },
 } satisfies ChartConfig;
 
-interface LiquidityChartProps {
+interface VolumeChartProps {
   id: string;
 }
 
-const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
+const VolumeChart = React.memo<VolumeChartProps>(({ id }) => {
   const [days, setDays] = React.useState<number>(30);
 
   const { data: poolDayData, isLoading } = useSWR<IPoolDayData[]>(
@@ -56,47 +56,47 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
   };
 
   const data = React.useMemo(() => {
-    const liquidityPerDays = (field: keyof IPoolDayData): { field: number }[] => {
+    const volumesPerDays = (field: keyof IPoolDayData): { field: number }[] => {
       const dates = Array.from({ length: days }, (_, i) => {
         return startOfDay(subDays(new Date(), i)).getTime();
       });
 
-      const filedByDate = new Map<number, number>();
+      const volumeByDate = new Map<number, number>();
 
       poolDayData?.forEach((day) => {
         const dateKey = startOfDay(fromUnixTime(day.date)).getTime();
         const value = parseFloat(day[field] as string);
 
-        if (filedByDate.has(dateKey)) {
-          filedByDate.set(dateKey, filedByDate.get(dateKey)! + value);
+        if (volumeByDate.has(dateKey)) {
+          volumeByDate.set(dateKey, volumeByDate.get(dateKey)! + value);
         } else {
-          filedByDate.set(dateKey, value);
+          volumeByDate.set(dateKey, value);
         }
       });
 
       const chartData = dates.map((date) => ({
-        field: filedByDate.get(date) || 0,
+        field: volumeByDate.get(date) || 0,
       }));
 
-      const fileds = chartData.map((d) => d.field);
-      const minFiled = Math.min(...fileds.filter((v) => v > 0));
-      const maxFiled = Math.max(...fileds);
+      const volumes = chartData.map((d) => d.field);
+      const minVolume = Math.min(...volumes.filter((v) => v > 0));
+      const maxVolume = Math.max(...volumes);
 
       const normalizedData = chartData.map((d) => {
         if (d.field === 0) return { field: 0 };
-        const field = ((d.field - minFiled) / (maxFiled - minFiled)) * (300 - 0) + 0;
+        const field = ((d.field - minVolume) / (maxVolume - minVolume)) * (300 - 0) + 0;
         return { field };
       });
 
       return normalizedData.reverse();
     };
 
-    const liquidityTotal = (): number =>
-      poolDayData?.reduce((total, day) => total + parseFloat(day.liquidity), 0) ?? 0;
+    const volumeTotal = (): number =>
+      poolDayData?.reduce((total, day) => total + parseFloat(day.volumeUSD), 0) ?? 0;
 
     return {
-      liquidityTotal: liquidityTotal(),
-      liquidityPerDays: liquidityPerDays('liquidity'),
+      volumeTotal: volumeTotal(),
+      volumePerDays: volumesPerDays('volumeUSD'),
     };
   }, [poolDayData, days]);
 
@@ -104,9 +104,9 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
     <div className="w-full">
       <div className="flex w-full justify-between gap-2 p-3">
         <div>
-          <Typography.P className="text-xs text-secondary-200">Total liquidity</Typography.P>
+          <Typography.P className="text-xs text-secondary-200">Total volume</Typography.P>
           <Typography.H4>
-            {isLoading ? 'Loading...' : numeral(data.liquidityTotal).format('0.00a')}
+            {isLoading ? 'Loading...' : numeral(data.volumeTotal).format('0.00a')}
           </Typography.H4>
         </div>
         <div className="flex gap-2">
@@ -145,10 +145,9 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
         </div>
       </div>
       <Chart className="max-h-[200px] min-h-[130px] w-full" config={config}>
-        <AreaChart
-          accessibilityLayer
-          barCategoryGap={3}
-          data={data.liquidityPerDays}
+        <BarChart
+          barCategoryGap={2}
+          data={data.volumePerDays}
           margin={{
             left: 12,
             right: 12,
@@ -161,18 +160,17 @@ const LiquidityChart = React.memo<LiquidityChartProps>(({ id }) => {
             strokeWidth={0.5}
             vertical={false}
           />
-          <Area
+          <Bar
             dataKey="field"
             fill="var(--color-field)"
-            fillOpacity={0.2}
+            fillOpacity={0.5}
             stroke="var(--color-field)"
-            strokeWidth={2}
-            type="natural"
+            strokeWidth={1}
           />
-        </AreaChart>
+        </BarChart>
       </Chart>
     </div>
   );
 });
 
-export default LiquidityChart;
+export default VolumeChart;

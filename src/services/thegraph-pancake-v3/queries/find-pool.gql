@@ -1,4 +1,4 @@
-query FindPool($id: String) {
+query FindPool($id: String, $startDate: Int, $endDate: Int) {
   pools(where: { id: $id }) {
     id
     feeTier
@@ -18,5 +18,15 @@ query FindPool($id: String) {
     }
     token0Price
     token1Price
+    poolDayData(
+      where: { date_gte: $startDate, date_lte: $endDate }
+      orderBy: date
+      orderDirection: desc
+    ) {
+      tvlUSD
+      feesUSD
+      volumeUSD
+      date
+    }
   }
 }
