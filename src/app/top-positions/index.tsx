@@ -4,7 +4,7 @@ import * as ThegraphPancakeV3 from '@/services/thegraph-pancake-v3/thegraph-panc
 
 import { PageUrlEnum } from '@/enums/page-url.enum';
 
-import { formatTruncateAddress } from '@/utils/format.util';
+import { truncateAddress } from '@/utils/format.util';
 
 import useSWR from 'swr';
 import { useNavigate } from 'react-router-dom';
@@ -89,7 +89,7 @@ const TopPositions: React.FC = () => {
                   >
                     <DataGrid.BodyCell className="uppercase">{`${pool.token0.symbol}/${pool.token1.symbol}`}</DataGrid.BodyCell>
                     <DataGrid.BodyCell className="font-semibold text-primary-300">
-                      {formatTruncateAddress(pool.id)}
+                      {truncateAddress(pool.id)}
                     </DataGrid.BodyCell>
                     <DataGrid.BodyCell className="font-semibold text-secondary-200">
                       {(feeTier / 10000).toFixed(2)}%

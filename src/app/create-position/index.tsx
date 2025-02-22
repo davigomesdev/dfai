@@ -7,17 +7,21 @@ import * as ERC20Service from '@/services/erc20/erc20.service';
 import * as PancakeV3Factory from '@/services/pancake-v3-factory/pancake-v3-factory.service';
 import * as ThegraphPancakeV3Service from '@/services/thegraph-pancake-v3/thegraph-pancake-v3.service';
 
+import { ethers } from 'ethers';
+import { Decimal } from 'decimal.js';
 import { getParams } from '@/utils/url.util';
 import { balanceOfEther } from '@/utils/ethers.util';
 import { subDays, getTime } from 'date-fns';
-import { ethers, formatUnits, parseUnits } from 'ethers';
-import { formatTruncateDecimal, truncateToDecimals } from '@/utils/format.util';
+import { formatNumber, sanitizedValue, truncateNumber } from '@/utils/format.util';
 
 import useSWR from 'swr';
 import { useToast } from '@/hooks/use-toast';
 import { useTokens } from '@/hooks/use-tokens';
 import { useWeb3ModalAccount } from '@web3modal/ethers/react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
+
+import { z } from 'zod';
+import { zodResolver } from '@hookform/resolvers/zod';
 
 import { ArrowRightLeft, ChevronDown, Minus, Plus } from 'lucide-react';
 
@@ -32,6 +36,7 @@ import DefaultIcon from '@/components/partials/default-icon';
 import TypingLoader from '@/components/common/typing-loader';
 import LiquidityChart from '@/components/charts/liquidity-chart-temp';
 import ListTokensDialog from '@/components/dialogs/list-tokens-dialog';
+import { useForm } from 'react-hook-form';
 
 const dataPrices = [
   { month: 'January', field: 186 },
@@ -69,6 +74,14 @@ const paramPoolTier = 'poolTier';
 
 const fees = [100, 500, 2500, 10000];
 
+const schema = z.object({
+  minPrice: z.number(),
+  maxPrice: z.number(),
+  amountA: z.string(),
+  amountB: z.string(),
+  slippage: z.number(),
+});
+
 const CreatePosition: React.FC = () => {
   const { toast } = useToast();
   const { findToken } = useTokens();
@@ -87,6 +100,21 @@ const CreatePosition: React.FC = () => {
   const [priceIn, setPriceIn] = React.useState<IToken | null>(null);
   const [minPrice, setMinPrice] = React.useState<string>('');
   const [maxPrice, setMaxPrice] = React.useState<string>('');
+
+  const [amountA, setAmountA] = React.useState<string>('');
+  const [amountB, setAmountB] = React.useState<string>('');
+  const [slippage, setSlippage] = React.useState<string>('1');
+
+  const form = useForm<z.infer<typeof schema>>({
+    resolver: zodResolver(schema),
+    defaultValues: {
+      minPrice: 0,
+      maxPrice: 0,
+      amountA: '',
+      amountB: '',
+      slippage: 1,
+    },
+  });
 
   const { data: pools, isLoading } = useSWR<IPool[] | null>(
     `pools/${tokenA?.id}/${tokenB?.id}`,
@@ -154,6 +182,9 @@ const CreatePosition: React.FC = () => {
     setPriceIn(null);
     setMinPrice('');
     setMaxPrice('');
+    setAmountA('');
+    setAmountB('');
+    setSlippage('');
   };
 
   const findPoolTier = (id: string): IPool | null => {
@@ -176,19 +207,65 @@ const CreatePosition: React.FC = () => {
     minPrice: string;
     maxPrice: string;
   } => {
-    const priceTuncat = truncateToDecimals(price, decimals);
-    const priceBigInt = parseUnits(priceTuncat, decimals);
+    const priceDecimal = new Decimal(price);
+    const rangeFactor = new Decimal(range).div(100);
 
-    const rangeFactor = BigInt(Math.floor(range * 100));
-    const oneHundred = BigInt(10000);
-
-    const minPrice = (priceBigInt * (oneHundred - rangeFactor)) / oneHundred;
-    const maxPrice = (priceBigInt * (oneHundred + rangeFactor)) / oneHundred;
+    const minPrice = priceDecimal.mul(new Decimal(1).minus(rangeFactor));
+    const maxPrice = priceDecimal.mul(new Decimal(1).plus(rangeFactor));
 
     return {
-      minPrice: formatUnits(minPrice, decimals),
-      maxPrice: formatUnits(maxPrice, decimals),
+      minPrice: truncateNumber(minPrice, decimals),
+      maxPrice: truncateNumber(maxPrice, decimals),
     };
+  };
+
+  const calculateFullPriceRange = (): {
+    minPrice: string;
+    maxPrice: string;
+  } => {
+    return {
+      minPrice: '0',
+      maxPrice: 'Infinity',
+    };
+  };
+
+  const handleSetPriceRange = (range: number): void => {
+    if (!priceIn || !poolTier) return;
+
+    const price = findTokenPrice(priceIn.id);
+
+    const { minPrice, maxPrice } = calculatePriceRange(price, range, priceIn.decimals);
+
+    setMinPrice(minPrice);
+    setMaxPrice(maxPrice);
+  };
+
+  const handleIncrementPrice = (set: (value: React.SetStateAction<string>) => void): void => {
+    set((currentValue) => {
+      const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
+
+      if (currentValue === 'Infinity' || BigInt(currentValue) >= maxUint256) return 'Infinity';
+
+      const num = new Decimal(Number(currentValue) === 0 ? 0.0001 : currentValue);
+
+      const increment = num.mul(new Decimal(0.0001));
+      const newValue = num.add(increment);
+
+      return truncateNumber(newValue, priceIn?.decimals);
+    });
+  };
+
+  const handleDecrementPrice = (set: (value: React.SetStateAction<string>) => void): void => {
+    set((currentValue) => {
+      const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
+
+      const num = new Decimal(currentValue === 'Infinity' ? maxUint256.toString() : currentValue);
+
+      const decrement = num.mul(new Decimal(0.0001));
+      const newValue = num.sub(decrement);
+
+      return truncateNumber(newValue, priceIn?.decimals);
+    });
   };
 
   const handleOnSelectPoolTier = (id: string): void => {
@@ -200,51 +277,59 @@ const CreatePosition: React.FC = () => {
     navigate(newPath);
   };
 
-  const handleOnClickIncrementPrice = (price: string, incrementPercentage: number): string => {
-    const priceTuncat = truncateToDecimals(price, 18);
-    const priceBigInt = parseUnits(price, 18);
-
-    const incrementFactor = BigInt(Math.floor(incrementPercentage * 100));
-    const oneHundred = BigInt(10000);
-
-    const newPrice = (priceBigInt * (oneHundred + incrementFactor)) / oneHundred;
-    return formatUnits(newPrice, 18);
-  };
-
-  const handleOnClickDecrementPrice = (price: string, decrementPercentage: number): string => {
-    const priceBigInt = parseUnits(price, 18);
-
-    const decrementFactor = BigInt(Math.floor(decrementPercentage * 100));
-    const oneHundred = BigInt(10000);
-
-    const newPrice = (priceBigInt * (oneHundred - decrementFactor)) / oneHundred;
-    return formatUnits(newPrice, 18);
-  };
-
-  const handleOnClickSetPriceRange = (range: number): void => {
+  const handleOnClickFullPriceRange = (): void => {
     if (!priceIn || !poolTier) return;
 
-    const price = findTokenPrice(priceIn.id);
-
-    const { minPrice, maxPrice } = calculatePriceRange(price, range, priceIn.decimals);
+    const { minPrice, maxPrice } = calculateFullPriceRange();
 
     setMinPrice(minPrice);
     setMaxPrice(maxPrice);
+  };
+
+  const handleOnClickAmountAMAX = (): void => {
+    const [amountA] = balances;
+    setAmountA(formatNumber(amountA, tokenA?.decimals));
+  };
+
+  const handleOnClickAmountBMAX = (): void => {
+    const [, amountB] = balances;
+    setAmountB(formatNumber(amountB, tokenB?.decimals));
   };
 
   const handleOnToggleSetPriceIn = (): void => {
     setPriceIn((priceIn) => (priceIn === tokenA ? tokenB : tokenA));
   };
 
+  const handleOnChangeSetSlippage = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const value = sanitizedValue(event.target.value, 2);
+    setSlippage(value);
+  };
+
   const handleOnChangeSetMinPrice = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const value = event.target.value;
+    const value = sanitizedValue(event.target.value, priceIn?.decimals);
     setMinPrice(value);
   };
 
   const handleOnChangeSetMaxPrice = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const value = event.target.value;
+    const value = sanitizedValue(event.target.value, priceIn?.decimals);
     setMaxPrice(value);
   };
+
+  const handleOnChangeSetAmountA = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const value = sanitizedValue(event.target.value, tokenA?.decimals);
+    setAmountA(value);
+  };
+
+  const handleOnChangeSetAmountB = (event: React.ChangeEvent<HTMLInputElement>): void => {
+    const value = sanitizedValue(event.target.value, tokenA?.decimals);
+    setAmountB(value);
+  };
+
+  React.useEffect(() => {
+    if (priceIn && poolTier) {
+      handleSetPriceRange(1);
+    }
+  }, [priceIn, poolTier]);
 
   React.useEffect(() => {
     const TOKEN_A_ID = params[paramTokenA];
@@ -264,6 +349,7 @@ const CreatePosition: React.FC = () => {
     }
 
     if (!poolTier || poolTier.id !== POOL_TIER_ID) {
+      resetForm();
       if (POOL_TIER_ID && tokenA && tokenB) {
         const tempPoolTier = findPoolTier(POOL_TIER_ID);
 
@@ -453,6 +539,7 @@ const CreatePosition: React.FC = () => {
                       className="h-full w-11 rounded-l-lg rounded-r-none"
                       size="icon"
                       variant="outlineSecondary"
+                      onClick={() => handleDecrementPrice(setMinPrice)}
                     >
                       <Minus />
                     </Button>
@@ -471,6 +558,7 @@ const CreatePosition: React.FC = () => {
                       className="h-full w-11 rounded-l-none rounded-r-lg"
                       size="icon"
                       variant="outlineSecondary"
+                      onClick={() => handleIncrementPrice(setMinPrice)}
                     >
                       <Plus />
                     </Button>
@@ -480,6 +568,7 @@ const CreatePosition: React.FC = () => {
                       className="h-full w-11 rounded-l-lg rounded-r-none"
                       size="icon"
                       variant="outlineSecondary"
+                      onClick={() => handleDecrementPrice(setMaxPrice)}
                     >
                       <Minus />
                     </Button>
@@ -498,6 +587,7 @@ const CreatePosition: React.FC = () => {
                       className="h-full w-11 rounded-l-none rounded-r-lg"
                       size="icon"
                       variant="outlineSecondary"
+                      onClick={() => handleIncrementPrice(setMaxPrice)}
                     >
                       <Plus />
                     </Button>
@@ -505,7 +595,11 @@ const CreatePosition: React.FC = () => {
                 </div>
                 <ul className="mt-2 flex w-full justify-center gap-2 p-2">
                   <li>
-                    <Button size="sm" variant="outlineSecondary">
+                    <Button
+                      size="sm"
+                      variant="outlineSecondary"
+                      onClick={() => handleSetPriceRange(1)}
+                    >
                       MIN
                     </Button>
                   </li>
@@ -513,7 +607,7 @@ const CreatePosition: React.FC = () => {
                     <Button
                       size="sm"
                       variant="outlineSecondary"
-                      onClick={() => handleOnClickSetPriceRange(1)}
+                      onClick={() => handleSetPriceRange(1)}
                     >
                       1%
                     </Button>
@@ -522,7 +616,7 @@ const CreatePosition: React.FC = () => {
                     <Button
                       size="sm"
                       variant="outlineSecondary"
-                      onClick={() => handleOnClickSetPriceRange(5)}
+                      onClick={() => handleSetPriceRange(5)}
                     >
                       5%
                     </Button>
@@ -531,7 +625,7 @@ const CreatePosition: React.FC = () => {
                     <Button
                       size="sm"
                       variant="outlineSecondary"
-                      onClick={() => handleOnClickSetPriceRange(10)}
+                      onClick={() => handleSetPriceRange(10)}
                     >
                       10%
                     </Button>
@@ -540,13 +634,17 @@ const CreatePosition: React.FC = () => {
                     <Button
                       size="sm"
                       variant="outlineSecondary"
-                      onClick={() => handleOnClickSetPriceRange(20)}
+                      onClick={() => handleSetPriceRange(20)}
                     >
                       20%
                     </Button>
                   </li>
                   <li>
-                    <Button size="sm" variant="outlineSecondary">
+                    <Button
+                      size="sm"
+                      variant="outlineSecondary"
+                      onClick={handleOnClickFullPriceRange}
+                    >
                       FULL
                     </Button>
                   </li>
@@ -562,7 +660,12 @@ const CreatePosition: React.FC = () => {
                       <Typography.P className="absolute left-3 top-1 text-center text-[9px] text-secondary-200">
                         Deposit slippage
                       </Typography.P>
-                      <Input className="pb-1 pt-4" placeholder="1" />
+                      <Input
+                        className="pb-1 pr-8 pt-4"
+                        placeholder="1"
+                        value={slippage}
+                        onChange={handleOnChangeSetSlippage}
+                      />
                       <Typography.P className="absolute right-4">%</Typography.P>
                     </div>
                   </div>
@@ -575,14 +678,24 @@ const CreatePosition: React.FC = () => {
                     {`${tokenA?.symbol} amount`}
                   </Typography.P>
                   <div className="relative flex items-center">
-                    <Input className="pb-1 pt-4" placeholder="0.0" />
+                    <Input
+                      className="pb-1 pr-16 pt-4"
+                      placeholder="0.0"
+                      value={amountA}
+                      onChange={handleOnChangeSetAmountA}
+                    />
                     <Typography.P className="absolute right-4">{tokenA?.symbol}</Typography.P>
                   </div>
-                  <div className="mt-2 flex w-full items-center gap-4">
+                  <div className="mt-2 flex w-full items-center gap-4 bg-black">
                     <Typography.P className="text-left text-xs text-secondary-200">
-                      {`Available ${formatTruncateDecimal(formatUnits(balanceTokenA, tokenA?.decimals), 8)} ${tokenA?.symbol}`}
+                      {`Available ${formatNumber(balanceTokenA, tokenA?.decimals)} ${tokenA?.symbol}`}
                     </Typography.P>
-                    <Button className="h-5 rounded-md px-2" size="sm" variant="outlineSecondary">
+                    <Button
+                      className="h-5 rounded-md px-2"
+                      size="sm"
+                      variant="outlineSecondary"
+                      onClick={handleOnClickAmountAMAX}
+                    >
                       MAX
                     </Button>
                   </div>
@@ -592,14 +705,24 @@ const CreatePosition: React.FC = () => {
                     {`${tokenB?.symbol} amount`}
                   </Typography.P>
                   <div className="relative flex items-center">
-                    <Input className="pb-1 pt-4" placeholder="0.0" />
+                    <Input
+                      className="pb-1 pr-16 pt-4"
+                      placeholder="0.0"
+                      value={amountB}
+                      onChange={handleOnChangeSetAmountB}
+                    />
                     <Typography.P className="absolute right-4">{tokenB?.symbol}</Typography.P>
                   </div>
-                  <div className="mt-2 flex w-full items-center gap-4">
+                  <div className="mt-2 flex w-full items-center gap-4 bg-black">
                     <Typography.P className="text-left text-xs text-secondary-200">
-                      {`Available ${formatTruncateDecimal(formatUnits(balanceTokenB, tokenB?.decimals), 8)} ${tokenB?.symbol}`}
+                      {`Available ${formatNumber(balanceTokenB, tokenB?.decimals)} ${tokenB?.symbol}`}
                     </Typography.P>
-                    <Button className="h-5 rounded-md px-2" size="sm" variant="outlineSecondary">
+                    <Button
+                      className="h-5 rounded-md px-2"
+                      size="sm"
+                      variant="outlineSecondary"
+                      onClick={handleOnClickAmountBMAX}
+                    >
                       MAX
                     </Button>
                   </div>
@@ -637,8 +760,8 @@ const CreatePosition: React.FC = () => {
                     <Card.Title>Deposit amount</Card.Title>
                   </Card.Header>
                   <Card.Content>
-                    <Typography.P>{`- 0.00000 ${tokenA?.symbol}`}</Typography.P>
-                    <Typography.P>{`- 0.00000 ${tokenB?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${amountA} ${tokenA?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${amountB} ${tokenB?.symbol}`}</Typography.P>
                   </Card.Content>
                 </Card>
               </Card.Content>

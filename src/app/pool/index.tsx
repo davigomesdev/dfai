@@ -11,7 +11,7 @@ import numeral from 'numeral';
 import { cn } from '@/utils/cn.util';
 import { buttonVariants } from '@/components/common/button';
 import { getTime, subHours } from 'date-fns';
-import { truncateToDecimals } from '@/utils/format.util';
+import { truncateNumber } from '@/utils/format.util';
 import { formatUnits, parseUnits } from 'ethers';
 
 import useSWR from 'swr';
@@ -140,10 +140,10 @@ const Pool: React.FC = () => {
                       current pool price
                     </Typography.P>
                     <Typography.P className="flex items-center gap-2 text-lg font-semibold">
-                      {truncateToDecimals(
+                      {truncateNumber(
                         formatUnits(
                           parseUnits(
-                            truncateToDecimals(pool.token1Price, tokenA.decimals),
+                            truncateNumber(pool.token1Price, tokenA.decimals),
                             tokenA.decimals,
                           ),
                           tokenA.decimals,

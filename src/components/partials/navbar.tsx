@@ -3,7 +3,7 @@ import React from 'react';
 import { NAV_MENUS } from '@/constants/nav-menus';
 
 import { cn } from '@/utils/cn.util';
-import { formatTruncateAddress } from '@/utils/format.util';
+import { truncateAddress } from '@/utils/format.util';
 
 import { useWeb3Modal, useWeb3ModalAccount } from '@web3modal/ethers/react';
 
@@ -43,7 +43,7 @@ const Navbar: React.FC = () => {
             </Typography.P>
             <Separator orientation="vertical" />
             <Typography.P className="flex text-sm font-semibold">
-              {formatTruncateAddress(address)}
+              {truncateAddress(address)}
             </Typography.P>
           </button>
         )}

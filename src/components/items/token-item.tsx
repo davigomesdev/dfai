@@ -6,9 +6,8 @@ import { IToken } from '@/interfaces/token.interface';
 
 import * as ERC20Service from '@/services/erc20/erc20.service';
 
-import { formatUnits } from 'ethers';
 import { balanceOfEther } from '@/utils/ethers.util';
-import { formatTruncateDecimal } from '@/utils/format.util';
+import { formatNumber, truncateNumber } from '@/utils/format.util';
 
 import useSWR from 'swr';
 
@@ -65,7 +64,7 @@ const TokenItem: React.FC<TokenItemProps> = ({
         </Typography.P>
       ) : (
         <Typography.P className="font-semibold text-secondary-200">
-          {balance ? formatTruncateDecimal(formatUnits(balance, decimals), 6) : 0}
+          {balance ? truncateNumber(formatNumber(balance, decimals), 6) : 0}
         </Typography.P>
       )}
     </li>
