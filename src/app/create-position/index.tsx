@@ -12,12 +12,13 @@ import { Decimal } from 'decimal.js';
 import { getParams } from '@/utils/url.util';
 import { balanceOfEther } from '@/utils/ethers.util';
 import { subDays, getTime } from 'date-fns';
-import { formatNumber, sanitizedValue, truncateNumber } from '@/utils/format.util';
+import { formatNumber, parseNumber, sanitizedValue, truncateNumber } from '@/utils/format.util';
 
 import useSWR from 'swr';
+import { useForm, UseFormReturn, UseFormSetValue } from 'react-hook-form';
 import { useToast } from '@/hooks/use-toast';
 import { useTokens } from '@/hooks/use-tokens';
-import { useWeb3ModalAccount } from '@web3modal/ethers/react';
+import { useWeb3Modal, useWeb3ModalAccount } from '@web3modal/ethers/react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 
 import { z } from 'zod';
@@ -25,6 +26,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 
 import { ArrowRightLeft, ChevronDown, Minus, Plus } from 'lucide-react';
 
+import Form from '@/components/common/form';
 import Card from '@/components/common/card';
 import Input from '@/components/common/input';
 import Button from '@/components/common/button';
@@ -36,7 +38,6 @@ import DefaultIcon from '@/components/partials/default-icon';
 import TypingLoader from '@/components/common/typing-loader';
 import LiquidityChart from '@/components/charts/liquidity-chart-temp';
 import ListTokensDialog from '@/components/dialogs/list-tokens-dialog';
-import { useForm } from 'react-hook-form';
 
 const dataPrices = [
   { month: 'January', field: 186 },
@@ -74,18 +75,49 @@ const paramPoolTier = 'poolTier';
 
 const fees = [100, 500, 2500, 10000];
 
-const schema = z.object({
-  minPrice: z.number(),
-  maxPrice: z.number(),
-  amountA: z.string(),
-  amountB: z.string(),
-  slippage: z.number(),
-});
+const schema = z
+  .object({
+    minPrice: z.string().nonempty({
+      message: 'Require field',
+    }),
+    maxPrice: z.string().nonempty({
+      message: 'Require field',
+    }),
+    amountA: z.string().nonempty({
+      message: 'Require field',
+    }),
+    amountB: z.string().nonempty({
+      message: 'Require field',
+    }),
+    slippage: z
+      .string()
+      .nonempty({
+        message: 'Require field',
+      })
+      .refine(
+        (val) => {
+          const slippageValue = parseFloat(val);
+          return slippageValue >= 0.1 && slippageValue <= 100;
+        },
+        {
+          message: 'Between 0.1% and 100%',
+        },
+      ),
+  })
+  .refine((data) => parseFloat(data.minPrice) < parseFloat(data.maxPrice), {
+    message: 'Min price must be less than max price',
+    path: ['maxPrice'],
+  })
+  .refine((data) => parseFloat(data.minPrice) < parseFloat(data.maxPrice), {
+    message: 'Min price must be less than max price',
+    path: ['minPrice'],
+  });
 
 const CreatePosition: React.FC = () => {
+  const { open } = useWeb3Modal();
   const { toast } = useToast();
   const { findToken } = useTokens();
-  const { address } = useWeb3ModalAccount();
+  const { isConnected, address } = useWeb3ModalAccount();
 
   const [searchParams] = useSearchParams();
   const params = getParams(searchParams);
@@ -95,24 +127,18 @@ const CreatePosition: React.FC = () => {
 
   const [tokenA, setTokenA] = React.useState<IToken | null>(null);
   const [tokenB, setTokenB] = React.useState<IToken | null>(null);
-  const [poolTier, setPoolTier] = React.useState<IPool | null>(null);
 
   const [priceIn, setPriceIn] = React.useState<IToken | null>(null);
-  const [minPrice, setMinPrice] = React.useState<string>('');
-  const [maxPrice, setMaxPrice] = React.useState<string>('');
-
-  const [amountA, setAmountA] = React.useState<string>('');
-  const [amountB, setAmountB] = React.useState<string>('');
-  const [slippage, setSlippage] = React.useState<string>('1');
+  const [poolTier, setPoolTier] = React.useState<IPool | null>(null);
 
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
     defaultValues: {
-      minPrice: 0,
-      maxPrice: 0,
+      minPrice: '',
+      maxPrice: '',
       amountA: '',
       amountB: '',
-      slippage: 1,
+      slippage: '',
     },
   });
 
@@ -180,11 +206,7 @@ const CreatePosition: React.FC = () => {
   const resetForm = (): void => {
     setPoolTier(null);
     setPriceIn(null);
-    setMinPrice('');
-    setMaxPrice('');
-    setAmountA('');
-    setAmountB('');
-    setSlippage('');
+    form.reset();
   };
 
   const findPoolTier = (id: string): IPool | null => {
@@ -210,8 +232,8 @@ const CreatePosition: React.FC = () => {
     const priceDecimal = new Decimal(price);
     const rangeFactor = new Decimal(range).div(100);
 
-    const minPrice = priceDecimal.mul(new Decimal(1).minus(rangeFactor));
-    const maxPrice = priceDecimal.mul(new Decimal(1).plus(rangeFactor));
+    const minPrice = priceDecimal.mul(new Decimal(1).sub(rangeFactor));
+    const maxPrice = priceDecimal.mul(new Decimal(1).add(rangeFactor));
 
     return {
       minPrice: truncateNumber(minPrice, decimals),
@@ -236,36 +258,37 @@ const CreatePosition: React.FC = () => {
 
     const { minPrice, maxPrice } = calculatePriceRange(price, range, priceIn.decimals);
 
-    setMinPrice(minPrice);
-    setMaxPrice(maxPrice);
+    form.setValue('minPrice', minPrice);
+    form.setValue('maxPrice', maxPrice);
   };
 
-  const handleIncrementPrice = (set: (value: React.SetStateAction<string>) => void): void => {
-    set((currentValue) => {
-      const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
+  const handleIncrementPrice = (key: keyof z.infer<typeof schema>): void => {
+    const currentValue = form.getValues(key);
+    const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
 
-      if (currentValue === 'Infinity' || BigInt(currentValue) >= maxUint256) return 'Infinity';
+    if (currentValue === 'Infinity' || parseNumber(currentValue) >= maxUint256) {
+      form.setValue(key, 'Infinity');
+      return;
+    }
 
-      const num = new Decimal(Number(currentValue) === 0 ? 0.0001 : currentValue);
+    const num = new Decimal(Number(currentValue) === 0 ? 0.0001 : currentValue);
 
-      const increment = num.mul(new Decimal(0.0001));
-      const newValue = num.add(increment);
+    const increment = num.mul(new Decimal(0.0001));
+    const newValue = num.add(increment);
 
-      return truncateNumber(newValue, priceIn?.decimals);
-    });
+    form.setValue(key, truncateNumber(newValue, priceIn?.decimals));
   };
 
-  const handleDecrementPrice = (set: (value: React.SetStateAction<string>) => void): void => {
-    set((currentValue) => {
-      const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
+  const handleDecrementPrice = (key: keyof z.infer<typeof schema>): void => {
+    const currentValue = form.getValues(key);
+    const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
 
-      const num = new Decimal(currentValue === 'Infinity' ? maxUint256.toString() : currentValue);
+    const num = new Decimal(currentValue === 'Infinity' ? maxUint256.toString() : currentValue);
 
-      const decrement = num.mul(new Decimal(0.0001));
-      const newValue = num.sub(decrement);
+    const decrement = num.mul(new Decimal(0.0001));
+    const newValue = num.sub(decrement);
 
-      return truncateNumber(newValue, priceIn?.decimals);
-    });
+    form.setValue(key, truncateNumber(newValue, priceIn?.decimals));
   };
 
   const handleOnSelectPoolTier = (id: string): void => {
@@ -277,52 +300,35 @@ const CreatePosition: React.FC = () => {
     navigate(newPath);
   };
 
+  const handleOnClickConnectWallet = (): void => {
+    open();
+  };
+
   const handleOnClickFullPriceRange = (): void => {
     if (!priceIn || !poolTier) return;
 
     const { minPrice, maxPrice } = calculateFullPriceRange();
 
-    setMinPrice(minPrice);
-    setMaxPrice(maxPrice);
+    form.setValue('minPrice', minPrice);
+    form.setValue('maxPrice', maxPrice);
   };
 
   const handleOnClickAmountAMAX = (): void => {
     const [amountA] = balances;
-    setAmountA(formatNumber(amountA, tokenA?.decimals));
+    form.setValue('amountA', formatNumber(amountA, tokenA?.decimals));
   };
 
   const handleOnClickAmountBMAX = (): void => {
     const [, amountB] = balances;
-    setAmountB(formatNumber(amountB, tokenB?.decimals));
+    form.setValue('amountB', formatNumber(amountB, tokenB?.decimals));
   };
 
   const handleOnToggleSetPriceIn = (): void => {
     setPriceIn((priceIn) => (priceIn === tokenA ? tokenB : tokenA));
   };
 
-  const handleOnChangeSetSlippage = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const value = sanitizedValue(event.target.value, 2);
-    setSlippage(value);
-  };
-
-  const handleOnChangeSetMinPrice = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const value = sanitizedValue(event.target.value, priceIn?.decimals);
-    setMinPrice(value);
-  };
-
-  const handleOnChangeSetMaxPrice = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const value = sanitizedValue(event.target.value, priceIn?.decimals);
-    setMaxPrice(value);
-  };
-
-  const handleOnChangeSetAmountA = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const value = sanitizedValue(event.target.value, tokenA?.decimals);
-    setAmountA(value);
-  };
-
-  const handleOnChangeSetAmountB = (event: React.ChangeEvent<HTMLInputElement>): void => {
-    const value = sanitizedValue(event.target.value, tokenA?.decimals);
-    setAmountB(value);
+  const handleOnSubmitAddLiquidity = async (values: z.infer<typeof schema>): Promise<void> => {
+    console.log(values);
   };
 
   React.useEffect(() => {
@@ -501,7 +507,7 @@ const CreatePosition: React.FC = () => {
           )
         ) : null}
         {poolTier ? (
-          <>
+          <Form {...form}>
             <Card>
               <Card.Header>
                 <div className="flex w-full items-end justify-between gap-2">
@@ -534,64 +540,102 @@ const CreatePosition: React.FC = () => {
                   </div>
                 </div>
                 <div className="flex w-full justify-center gap-6">
-                  <div className="mt-2 flex items-center">
-                    <Button
-                      className="h-full w-11 rounded-l-lg rounded-r-none"
-                      size="icon"
-                      variant="outlineSecondary"
-                      onClick={() => handleDecrementPrice(setMinPrice)}
-                    >
-                      <Minus />
-                    </Button>
-                    <div className="relative">
-                      <Typography.P className="absolute left-2 top-1 text-center text-[9px] text-secondary-200">
-                        MIN PRICE
-                      </Typography.P>
-                      <Input
-                        className="rounded-none border-x-0 pb-1 pt-4"
-                        placeholder="0.0"
-                        value={minPrice}
-                        onChange={handleOnChangeSetMinPrice}
-                      />
-                    </div>
-                    <Button
-                      className="h-full w-11 rounded-l-none rounded-r-lg"
-                      size="icon"
-                      variant="outlineSecondary"
-                      onClick={() => handleIncrementPrice(setMinPrice)}
-                    >
-                      <Plus />
-                    </Button>
-                  </div>
-                  <div className="mt-2 flex items-center">
-                    <Button
-                      className="h-full w-11 rounded-l-lg rounded-r-none"
-                      size="icon"
-                      variant="outlineSecondary"
-                      onClick={() => handleDecrementPrice(setMaxPrice)}
-                    >
-                      <Minus />
-                    </Button>
-                    <div className="relative">
-                      <Typography.P className="absolute left-2 top-1 text-center text-[9px] text-secondary-200">
-                        MAX PRICE
-                      </Typography.P>
-                      <Input
-                        className="rounded-none border-x-0 pb-1 pt-4"
-                        placeholder="0.0"
-                        value={maxPrice}
-                        onChange={handleOnChangeSetMaxPrice}
-                      />
-                    </div>
-                    <Button
-                      className="h-full w-11 rounded-l-none rounded-r-lg"
-                      size="icon"
-                      variant="outlineSecondary"
-                      onClick={() => handleIncrementPrice(setMaxPrice)}
-                    >
-                      <Plus />
-                    </Button>
-                  </div>
+                  <Form.Field
+                    control={form.control}
+                    name="minPrice"
+                    render={({ field }) => {
+                      const handleChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+                        const value = sanitizedValue(event.target.value, tokenA?.decimals);
+                        field.onChange(value);
+                      };
+
+                      return (
+                        <Form.Item>
+                          <Form.Control>
+                            <div className="mt-2 flex items-center">
+                              <Button
+                                className="h-11 w-11 rounded-l-lg rounded-r-none"
+                                size="icon"
+                                variant="outlineSecondary"
+                                onClick={() => handleDecrementPrice('minPrice')}
+                              >
+                                <Minus />
+                              </Button>
+                              <div className="relative">
+                                <Typography.P className="absolute left-2 top-1 text-center text-[9px] text-secondary-200">
+                                  MIN PRICE
+                                </Typography.P>
+                                <Input
+                                  className="rounded-none border-x-0 pb-1 pt-4"
+                                  placeholder="0.0"
+                                  {...field}
+                                  value={field.value}
+                                  onChange={handleChange}
+                                />
+                              </div>
+                              <Button
+                                className="h-11 w-11 rounded-l-none rounded-r-lg"
+                                size="icon"
+                                variant="outlineSecondary"
+                                onClick={() => handleIncrementPrice('minPrice')}
+                              >
+                                <Plus />
+                              </Button>
+                            </div>
+                          </Form.Control>
+                          <Form.Message className="text-center" />
+                        </Form.Item>
+                      );
+                    }}
+                  />
+                  <Form.Field
+                    control={form.control}
+                    name="maxPrice"
+                    render={({ field }) => {
+                      const handleChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+                        const value = sanitizedValue(event.target.value, tokenB?.decimals);
+                        field.onChange(value);
+                      };
+
+                      return (
+                        <Form.Item>
+                          <Form.Control>
+                            <div className="mt-2 flex items-center">
+                              <Button
+                                className="h-11 w-11 rounded-l-lg rounded-r-none"
+                                size="icon"
+                                variant="outlineSecondary"
+                                onClick={() => handleDecrementPrice('maxPrice')}
+                              >
+                                <Minus />
+                              </Button>
+                              <div className="relative">
+                                <Typography.P className="absolute left-2 top-1 text-center text-[9px] text-secondary-200">
+                                  MAX PRICE
+                                </Typography.P>
+                                <Input
+                                  className="rounded-none border-x-0 pb-1 pt-4"
+                                  placeholder="0.0"
+                                  {...field}
+                                  value={field.value}
+                                  onChange={handleChange}
+                                />
+                              </div>
+                              <Button
+                                className="h-11 w-11 rounded-l-none rounded-r-lg"
+                                size="icon"
+                                variant="outlineSecondary"
+                                onClick={() => handleIncrementPrice('maxPrice')}
+                              >
+                                <Plus />
+                              </Button>
+                            </div>
+                          </Form.Control>
+                          <Form.Message className="text-center" />
+                        </Form.Item>
+                      );
+                    }}
+                  />
                 </div>
                 <ul className="mt-2 flex w-full justify-center gap-2 p-2">
                   <li>
@@ -656,18 +700,37 @@ const CreatePosition: React.FC = () => {
                 <div className="flex w-full items-end justify-between gap-2">
                   <Card.Title>Deposit amount</Card.Title>
                   <div>
-                    <div className="relative flex w-full max-w-[130px] items-center">
-                      <Typography.P className="absolute left-3 top-1 text-center text-[9px] text-secondary-200">
-                        Deposit slippage
-                      </Typography.P>
-                      <Input
-                        className="pb-1 pr-8 pt-4"
-                        placeholder="1"
-                        value={slippage}
-                        onChange={handleOnChangeSetSlippage}
-                      />
-                      <Typography.P className="absolute right-4">%</Typography.P>
-                    </div>
+                    <Form.Field
+                      control={form.control}
+                      name="slippage"
+                      render={({ field }) => {
+                        const handleChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+                          const value = sanitizedValue(event.target.value, 2);
+                          field.onChange(value);
+                        };
+
+                        return (
+                          <Form.Item>
+                            <Form.Control>
+                              <div className="relative flex w-full max-w-[130px] items-center">
+                                <Typography.P className="absolute left-3 top-1 text-center text-[9px] text-secondary-200">
+                                  Deposit slippage
+                                </Typography.P>
+                                <Input
+                                  className="pb-1 pr-8 pt-4"
+                                  placeholder="1"
+                                  {...field}
+                                  value={field.value}
+                                  onChange={handleChange}
+                                />
+                                <Typography.P className="absolute right-4">%</Typography.P>
+                              </div>
+                            </Form.Control>
+                            <Form.Message />
+                          </Form.Item>
+                        );
+                      }}
+                    />
                   </div>
                 </div>
                 <Card.Description>Add the deposit amounts</Card.Description>
@@ -677,15 +740,36 @@ const CreatePosition: React.FC = () => {
                   <Typography.P className="absolute left-3 top-1 text-center text-[9px] text-secondary-200">
                     {`${tokenA?.symbol} amount`}
                   </Typography.P>
-                  <div className="relative flex items-center">
-                    <Input
-                      className="pb-1 pr-16 pt-4"
-                      placeholder="0.0"
-                      value={amountA}
-                      onChange={handleOnChangeSetAmountA}
-                    />
-                    <Typography.P className="absolute right-4">{tokenA?.symbol}</Typography.P>
-                  </div>
+                  <Form.Field
+                    control={form.control}
+                    name="amountA"
+                    render={({ field }) => {
+                      const handleChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+                        const value = sanitizedValue(event.target.value, tokenA?.decimals);
+                        field.onChange(value);
+                      };
+
+                      return (
+                        <Form.Item>
+                          <Form.Control>
+                            <div className="relative flex items-center">
+                              <Input
+                                className="pb-1 pr-16 pt-4"
+                                placeholder="0.0"
+                                {...field}
+                                value={field.value}
+                                onChange={handleChange}
+                              />
+                              <Typography.P className="absolute right-4">
+                                {tokenA?.symbol}
+                              </Typography.P>
+                            </div>
+                          </Form.Control>
+                          <Form.Message />
+                        </Form.Item>
+                      );
+                    }}
+                  />
                   <div className="mt-2 flex w-full items-center gap-4 bg-black">
                     <Typography.P className="text-left text-xs text-secondary-200">
                       {`Available ${formatNumber(balanceTokenA, tokenA?.decimals)} ${tokenA?.symbol}`}
@@ -704,15 +788,36 @@ const CreatePosition: React.FC = () => {
                   <Typography.P className="absolute left-3 top-1 text-center text-[9px] text-secondary-200">
                     {`${tokenB?.symbol} amount`}
                   </Typography.P>
-                  <div className="relative flex items-center">
-                    <Input
-                      className="pb-1 pr-16 pt-4"
-                      placeholder="0.0"
-                      value={amountB}
-                      onChange={handleOnChangeSetAmountB}
-                    />
-                    <Typography.P className="absolute right-4">{tokenB?.symbol}</Typography.P>
-                  </div>
+                  <Form.Field
+                    control={form.control}
+                    name="amountB"
+                    render={({ field }) => {
+                      const handleChange = (event: React.ChangeEvent<HTMLInputElement>): void => {
+                        const value = sanitizedValue(event.target.value, tokenB?.decimals);
+                        field.onChange(value);
+                      };
+
+                      return (
+                        <Form.Item>
+                          <Form.Control>
+                            <div className="relative flex items-center">
+                              <Input
+                                className="pb-1 pr-16 pt-4"
+                                placeholder="0.0"
+                                {...field}
+                                value={field.value}
+                                onChange={handleChange}
+                              />
+                              <Typography.P className="absolute right-4">
+                                {tokenB?.symbol}
+                              </Typography.P>
+                            </div>
+                          </Form.Control>
+                          <Form.Message />
+                        </Form.Item>
+                      );
+                    }}
+                  />
                   <div className="mt-2 flex w-full items-center gap-4 bg-black">
                     <Typography.P className="text-left text-xs text-secondary-200">
                       {`Available ${formatNumber(balanceTokenB, tokenB?.decimals)} ${tokenB?.symbol}`}
@@ -760,26 +865,35 @@ const CreatePosition: React.FC = () => {
                     <Card.Title>Deposit amount</Card.Title>
                   </Card.Header>
                   <Card.Content>
-                    <Typography.P>{`- ${amountA} ${tokenA?.symbol}`}</Typography.P>
-                    <Typography.P>{`- ${amountB} ${tokenB?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${form.watch('amountA')} ${tokenA?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${form.watch('amountB')} ${tokenB?.symbol}`}</Typography.P>
                   </Card.Content>
                 </Card>
               </Card.Content>
               <Card.Footer className="flex items-center justify-end border-t border-secondary-800 bg-secondary-950 py-5">
-                <div className="space-x-4">
-                  {!tokenA?.isNative ? (
-                    <Button variant="outline">{`Approve ${tokenA?.symbol}`}</Button>
-                  ) : null}
-                  {!tokenB?.isNative ? (
-                    <Button variant="outline">{`Approve ${tokenB?.symbol}`}</Button>
-                  ) : null}
-                  <Button disabled variant="outline">
-                    {`Initiate ${tokenA?.symbol}/${tokenB?.symbol} position`}
+                {!isConnected ? (
+                  <Button variant="outline" onClick={handleOnClickConnectWallet}>
+                    Connect wallet
                   </Button>
-                </div>
+                ) : (
+                  <div className="space-x-4">
+                    {!tokenA?.isNative ? (
+                      <Button variant="outline">{`Approve ${tokenA?.symbol}`}</Button>
+                    ) : null}
+                    {!tokenB?.isNative ? (
+                      <Button variant="outline">{`Approve ${tokenB?.symbol}`}</Button>
+                    ) : null}
+                    <Button
+                      variant="outline"
+                      onClick={() => form.handleSubmit(handleOnSubmitAddLiquidity)()}
+                    >
+                      {`Initiate ${tokenA?.symbol}/${tokenB?.symbol} position`}
+                    </Button>
+                  </div>
+                )}
               </Card.Footer>
             </Card>
-          </>
+          </Form>
         ) : null}
       </section>
     </main>
