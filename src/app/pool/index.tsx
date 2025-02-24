@@ -10,8 +10,8 @@ import * as ThegraphPancakeV3Service from '@/services/thegraph-pancake-v3/thegra
 import numeral from 'numeral';
 import { cn } from '@/utils/cn.util';
 import { buttonVariants } from '@/components/common/button';
-import { getTime, subHours } from 'date-fns';
 import { truncateNumber } from '@/utils/format.util';
+import { getTime, subHours } from 'date-fns';
 import { formatUnits, parseUnits } from 'ethers';
 
 import useSWR from 'swr';

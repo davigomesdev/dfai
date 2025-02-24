@@ -304,8 +304,8 @@ const CreatePosition: React.FC = () => {
     const quoteToken =
       priceIn.address.toLowerCase() === tokenA.address.toLowerCase() ? tokenB : tokenA;
 
-    const normalizedMinPrice = parseFloat(formatNumber(minPrice, quoteToken.decimals));
-    const normalizedMaxPrice = parseFloat(formatNumber(maxPrice, quoteToken.decimals));
+    const normalizedMinPrice = parseFloat(truncateNumber(minPrice, quoteToken.decimals));
+    const normalizedMaxPrice = parseFloat(truncateNumber(maxPrice, quoteToken.decimals));
 
     const minTick = priceToTick(normalizedMinPrice);
     const maxTick = priceToTick(normalizedMaxPrice);
@@ -1125,7 +1125,6 @@ const CreatePosition: React.FC = () => {
                       </Button>
                     ) : null}
                     <Button
-                      disabled={!isAllowanceA || !isAllowanceB || isPending}
                       variant="outline"
                       onClick={() => form.handleSubmit(handleOnSubmitMint)()}
                     >

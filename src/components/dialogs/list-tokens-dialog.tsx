@@ -61,8 +61,6 @@ const ListTokensDialog: React.FC<ListTokensDialog> = ({ param, children }) => {
     }
 
     params.set(param, id);
-    params.delete('poolTier');
-
     const newPath = `${location.pathname}?${params.toString()}`;
 
     navigate(newPath);
