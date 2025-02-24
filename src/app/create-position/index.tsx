@@ -1077,7 +1077,7 @@ const CreatePosition: React.FC = () => {
                   </Card.Header>
                   <Card.Content>
                     <Typography.P>{`- ${form.watch('minPrice')} ${tokenA?.symbol}`}</Typography.P>
-                    <Typography.P>{`- ${form.watch('minPrice')} ${tokenB?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${1 / parseFloat(form.watch('minPrice'))} ${tokenB?.symbol}`}</Typography.P>
                   </Card.Content>
                 </Card>
                 <Card className="max-w-fit bg-black">
@@ -1086,7 +1086,7 @@ const CreatePosition: React.FC = () => {
                   </Card.Header>
                   <Card.Content>
                     <Typography.P>{`- ${form.watch('maxPrice')} ${tokenA?.symbol}`}</Typography.P>
-                    <Typography.P>{`- ${form.watch('maxPrice')} ${tokenB?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${1 / parseFloat(form.watch('maxPrice'))} ${tokenB?.symbol}`}</Typography.P>
                   </Card.Content>
                 </Card>
                 <Card className="max-w-fit bg-black">
