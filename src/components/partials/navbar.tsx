@@ -1,10 +1,14 @@
 import React from 'react';
 
+import { DFAI } from '@/constants/env-contants';
 import { NAV_MENUS } from '@/constants/nav-menus';
 
-import { cn } from '@/utils/cn.util';
-import { truncateAddress } from '@/utils/format.util';
+import * as ERC20Service from '@/services/erc20/erc20.service';
 
+import { cn } from '@/utils/cn.util';
+import { formatNumber, truncateAddress } from '@/utils/format.util';
+
+import useSWR from 'swr';
 import { useWeb3Modal, useWeb3ModalAccount } from '@web3modal/ethers/react';
 
 import { Link, useLocation } from 'react-router-dom';
@@ -16,6 +20,12 @@ import Typography from '../common/typography';
 const Navbar: React.FC = () => {
   const { open } = useWeb3Modal();
   const { address } = useWeb3ModalAccount();
+
+  const { data: balance = 0n } = useSWR<bigint>(`dfaiBalance/${address}`, async () =>
+    ERC20Service.balanceOf({
+      address: DFAI,
+    }),
+  );
 
   const handleOnClickConnectWallet = (): void => {
     open();
@@ -37,9 +47,12 @@ const Navbar: React.FC = () => {
             Connect Wallet
           </Button>
         ) : (
-          <button className="flex h-[30px] items-center gap-2 rounded-lg border border-primary-500 px-4 pl-2">
+          <button
+            className="flex h-[30px] items-center gap-2 rounded-lg border border-primary-500 px-4 pl-2"
+            onClick={handleOnClickConnectWallet}
+          >
             <Typography.P className="flex text-xs font-semibold text-primary-400">
-              0 DFAI
+              {`${formatNumber(balance)} DFAI`}
             </Typography.P>
             <Separator orientation="vertical" />
             <Typography.P className="flex text-sm font-semibold">

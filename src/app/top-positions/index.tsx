@@ -57,7 +57,8 @@ const TopPositions: React.FC = () => {
         </div>
         <DataGrid className="w-full max-w-screen-xl rounded-xl border border-secondary-950 p-5">
           <DataGrid.Header className="sticky top-[55px] grid-cols-6">
-            <DataGrid.HeaderCell>POOLS</DataGrid.HeaderCell>
+            <DataGrid.HeaderCell>POOL</DataGrid.HeaderCell>
+            <DataGrid.HeaderCell>NFT</DataGrid.HeaderCell>
             <DataGrid.HeaderCell>ADDRESS</DataGrid.HeaderCell>
             <DataGrid.HeaderCell>FEE TIER</DataGrid.HeaderCell>
             <DataGrid.HeaderCell>APR</DataGrid.HeaderCell>

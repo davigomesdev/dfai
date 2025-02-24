@@ -1,22 +1,32 @@
 import React from 'react';
 
+import { NONFUNGIBLE_POSITION_MANAGER } from '@/constants/env-contants';
+
 import { IPool } from '@/interfaces/pool.interface';
 import { IToken } from '@/interfaces/token.interface';
+
+import { PageUrlEnum } from '@/enums/page-url.enum';
 
 import * as ERC20Service from '@/services/erc20/erc20.service';
 import * as PancakeV3Factory from '@/services/pancake-v3-factory/pancake-v3-factory.service';
 import * as ThegraphPancakeV3Service from '@/services/thegraph-pancake-v3/thegraph-pancake-v3.service';
+import * as NonfungiblePositionManagerService from '@/services/nonfungible-position-manager/nonfungible-position-manager.service';
 
 import { ethers } from 'ethers';
 import { Decimal } from 'decimal.js';
 import { getParams } from '@/utils/url.util';
 import { balanceOfEther } from '@/utils/ethers.util';
 import { subDays, getTime } from 'date-fns';
-import { formatNumber, parseNumber, sanitizedValue, truncateNumber } from '@/utils/format.util';
+import {
+  formatNumber,
+  futureBlockTimestamp,
+  parseNumber,
+  sanitizedValue,
+  truncateNumber,
+} from '@/utils/format.util';
 
 import useSWR from 'swr';
-import { useForm, UseFormReturn, UseFormSetValue } from 'react-hook-form';
-import { useToast } from '@/hooks/use-toast';
+import { useForm } from 'react-hook-form';
 import { useTokens } from '@/hooks/use-tokens';
 import { useWeb3Modal, useWeb3ModalAccount } from '@web3modal/ethers/react';
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom';
@@ -73,6 +83,9 @@ const paramTokenA = 'tokenA';
 const paramTokenB = 'tokenB';
 const paramPoolTier = 'poolTier';
 
+const MIN_TICK = -887272;
+const MAX_TICK = 887272;
+
 const fees = [100, 500, 2500, 10000];
 
 const schema = z
@@ -83,12 +96,34 @@ const schema = z
     maxPrice: z.string().nonempty({
       message: 'Require field',
     }),
-    amountA: z.string().nonempty({
-      message: 'Require field',
-    }),
-    amountB: z.string().nonempty({
-      message: 'Require field',
-    }),
+    amountA: z
+      .string()
+      .nonempty({
+        message: 'Require field',
+      })
+      .refine(
+        (val) => {
+          const slippageValue = parseFloat(val);
+          return slippageValue !== 0;
+        },
+        {
+          message: 'Enter an amount',
+        },
+      ),
+    amountB: z
+      .string()
+      .nonempty({
+        message: 'Require field',
+      })
+      .refine(
+        (val) => {
+          const slippageValue = parseFloat(val);
+          return slippageValue !== 0;
+        },
+        {
+          message: 'Enter an amount',
+        },
+      ),
     slippage: z
       .string()
       .nonempty({
@@ -115,7 +150,6 @@ const schema = z
 
 const CreatePosition: React.FC = () => {
   const { open } = useWeb3Modal();
-  const { toast } = useToast();
   const { findToken } = useTokens();
   const { isConnected, address } = useWeb3ModalAccount();
 
@@ -130,6 +164,10 @@ const CreatePosition: React.FC = () => {
 
   const [priceIn, setPriceIn] = React.useState<IToken | null>(null);
   const [poolTier, setPoolTier] = React.useState<IPool | null>(null);
+
+  const [isPendingMint, setIsPendingMint] = React.useState<boolean>(false);
+  const [isPendingApproveTokenA, setIsPendingApproveTokenA] = React.useState<boolean>(false);
+  const [isPendingApproveTokenB, setIsPendingApproveTokenB] = React.useState<boolean>(false);
 
   const form = useForm<z.infer<typeof schema>>({
     resolver: zodResolver(schema),
@@ -183,7 +221,7 @@ const CreatePosition: React.FC = () => {
     { errorRetryCount: 3 },
   );
 
-  const { data: balances = [0n, 0n] } = useSWR<[bigint, bigint]>(
+  const { data: balances = [0n, 0n], mutate: mutateBalances } = useSWR<[bigint, bigint]>(
     `balances/${address}/${tokenA?.id}/${tokenB?.id}`,
     async () => {
       if (!tokenA || !tokenB) return [0n, 0n];
@@ -197,6 +235,32 @@ const CreatePosition: React.FC = () => {
         : await ERC20Service.balanceOf({ address: tokenB.address });
 
       return [balanceA, balanceB];
+    },
+    {
+      errorRetryCount: 3,
+    },
+  );
+
+  const { data: allowances = [0n, 0n], mutate: mutateAllowances } = useSWR<[bigint, bigint]>(
+    `allowances/${address}/${tokenA?.id}/${tokenB?.id}`,
+    async () => {
+      if (!tokenA || !tokenB) return [0n, 0n];
+
+      const allowanceA = tokenA?.isNative
+        ? 0n
+        : await ERC20Service.allowance({
+            address: tokenA.address,
+            spender: NONFUNGIBLE_POSITION_MANAGER,
+          });
+
+      const allowanceB = tokenB?.isNative
+        ? 0n
+        : await ERC20Service.allowance({
+            address: tokenB.address,
+            spender: NONFUNGIBLE_POSITION_MANAGER,
+          });
+
+      return [allowanceA, allowanceB];
     },
     {
       errorRetryCount: 3,
@@ -219,6 +283,34 @@ const CreatePosition: React.FC = () => {
     return id.toLowerCase() === poolTier!.token0.id.toLowerCase()
       ? poolTier!.token0Price
       : poolTier!.token1Price;
+  };
+
+  const priceToTick = (price: number): number => {
+    return Math.floor(Math.log(price) / Math.log(1.0001));
+  };
+
+  const calculateMaxPriceBeforeFullRange = (): number => {
+    const maxTickBeforeFullRange = MAX_TICK - 1;
+    return Math.pow(1.0001, maxTickBeforeFullRange);
+  };
+
+  const calculateTicks = (
+    minPrice: string,
+    maxPrice: string,
+    priceIn: IToken,
+    tokenA: IToken,
+    tokenB: IToken,
+  ): { minTick: number; maxTick: number } => {
+    const quoteToken =
+      priceIn.address.toLowerCase() === tokenA.address.toLowerCase() ? tokenB : tokenA;
+
+    const normalizedMinPrice = parseFloat(formatNumber(minPrice, quoteToken.decimals));
+    const normalizedMaxPrice = parseFloat(formatNumber(maxPrice, quoteToken.decimals));
+
+    const minTick = priceToTick(normalizedMinPrice);
+    const maxTick = priceToTick(normalizedMaxPrice);
+
+    return { minTick, maxTick };
   };
 
   const calculatePriceRange = (
@@ -264,9 +356,9 @@ const CreatePosition: React.FC = () => {
 
   const handleIncrementPrice = (key: keyof z.infer<typeof schema>): void => {
     const currentValue = form.getValues(key);
-    const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
+    const maxPriceBeforeFullRange = calculateMaxPriceBeforeFullRange();
 
-    if (currentValue === 'Infinity' || parseNumber(currentValue) >= maxUint256) {
+    if (currentValue === 'Infinity' || parseNumber(currentValue) >= maxPriceBeforeFullRange) {
       form.setValue(key, 'Infinity');
       return;
     }
@@ -281,9 +373,11 @@ const CreatePosition: React.FC = () => {
 
   const handleDecrementPrice = (key: keyof z.infer<typeof schema>): void => {
     const currentValue = form.getValues(key);
-    const maxUint256 = BigInt(2) ** BigInt(256) - BigInt(1);
+    const maxPriceBeforeFullRange = calculateMaxPriceBeforeFullRange();
 
-    const num = new Decimal(currentValue === 'Infinity' ? maxUint256.toString() : currentValue);
+    const num = new Decimal(
+      currentValue === 'Infinity' ? maxPriceBeforeFullRange.toString() : currentValue,
+    );
 
     const decrement = num.mul(new Decimal(0.0001));
     const newValue = num.sub(decrement);
@@ -327,15 +421,126 @@ const CreatePosition: React.FC = () => {
     setPriceIn((priceIn) => (priceIn === tokenA ? tokenB : tokenA));
   };
 
-  const handleOnSubmitAddLiquidity = async (values: z.infer<typeof schema>): Promise<void> => {
-    console.log(values);
+  const handleOnClickApproveAmountA = async (): Promise<void> => {
+    if (!tokenA) return;
+
+    try {
+      setIsPendingApproveTokenA(true);
+
+      const amount = parseNumber(form.getValues('amountA'), tokenA.decimals);
+
+      await ERC20Service.approve({
+        address: tokenA.address,
+        spender: NONFUNGIBLE_POSITION_MANAGER,
+        amount,
+      });
+
+      mutateAllowances();
+    } finally {
+      setIsPendingApproveTokenA(false);
+    }
   };
 
-  React.useEffect(() => {
-    if (priceIn && poolTier) {
-      handleSetPriceRange(1);
+  const handleOnClickApproveAmountB = async (): Promise<void> => {
+    if (!tokenB) return;
+
+    try {
+      setIsPendingApproveTokenB(true);
+
+      const amount = parseNumber(form.getValues('amountB'), tokenB.decimals);
+
+      await ERC20Service.approve({
+        address: tokenB.address,
+        spender: NONFUNGIBLE_POSITION_MANAGER,
+        amount,
+      });
+
+      mutateAllowances();
+    } finally {
+      setIsPendingApproveTokenB(false);
     }
-  }, [priceIn, poolTier]);
+  };
+
+  const handleOnSubmitMint = async (values: z.infer<typeof schema>): Promise<void> => {
+    if (!poolTier || !tokenA || !tokenB || !priceIn) return;
+
+    try {
+      setIsPendingMint(true);
+
+      const { amountA, amountB, minPrice, maxPrice, slippage } = values;
+
+      const isFullRange = minPrice === '0' && maxPrice === 'Infinity';
+      const slippageFactor = BigInt(Math.floor((1 - Number(slippage) / 100) * 10000));
+
+      const token0 =
+        poolTier.token0.id.toLowerCase() === tokenA.address.toLowerCase() ? tokenA : tokenB;
+      const token1 =
+        poolTier.token1.id.toLowerCase() === tokenB.address.toLowerCase() ? tokenB : tokenA;
+
+      const amount0 =
+        poolTier.token0.id.toLowerCase() === tokenA.address.toLowerCase() ? amountA : amountB;
+      const amount1 =
+        poolTier.token1.id.toLowerCase() === tokenB.address.toLowerCase() ? amountB : amountA;
+
+      const amount0Desired = parseNumber(amount0, token0.decimals);
+      const amount1Desired = parseNumber(amount1, token1.decimals);
+
+      const amount0Min = (amount0Desired * slippageFactor) / 10000n;
+      const amount1Min = (amount1Desired * slippageFactor) / 10000n;
+
+      const { minTick, maxTick } = isFullRange
+        ? { minTick: MIN_TICK, maxTick: MAX_TICK }
+        : calculateTicks(minPrice, maxPrice, priceIn, tokenA, tokenB);
+
+      const fee = parseInt(poolTier.feeTier);
+      const deadline = futureBlockTimestamp(20);
+
+      await NonfungiblePositionManagerService.mint({
+        payableAmount: token1.isNative ? amount1Desired : 0n,
+        token0: token0.address,
+        token1: token1.address,
+        tickLower: minTick,
+        tickUpper: maxTick,
+        amount0Desired,
+        amount1Desired: token1.isNative ? 0n : amount1Desired,
+        amount0Min,
+        amount1Min,
+        fee,
+        deadline,
+      });
+
+      mutateBalances();
+      mutateAllowances();
+
+      navigate(PageUrlEnum.DASHBOARD);
+    } finally {
+      setIsPendingMint(false);
+    }
+  };
+
+  const isAllowanceA = React.useMemo(() => {
+    if (!tokenA) return false;
+    if (tokenA.isNative) return true;
+    return parseNumber(form.watch('amountA'), tokenA.decimals) <= allowances[0];
+  }, [form.watch('amountA'), tokenA, allowances]);
+
+  const isAllowanceB = React.useMemo(() => {
+    if (!tokenB) return false;
+    if (tokenB.isNative) return true;
+    return parseNumber(form.watch('amountB'), tokenB.decimals) <= allowances[1];
+  }, [form.watch('amountB'), tokenB, allowances]);
+
+  const { maxValue, minValue } = React.useMemo(() => {
+    const values = dataPrices.map((item) => item.field);
+    return {
+      maxValue: Math.max(...values),
+      minValue: Math.min(...values),
+    };
+  }, [dataPrices]);
+
+  const isPending = React.useMemo(() => {
+    return isPendingMint || isPendingApproveTokenA || isPendingApproveTokenB;
+  }, [isPendingMint, isPendingApproveTokenA, isPendingApproveTokenB]);
 
   React.useEffect(() => {
     const TOKEN_A_ID = params[paramTokenA];
@@ -344,22 +549,20 @@ const CreatePosition: React.FC = () => {
 
     if (TOKEN_A_ID && (!tokenA || tokenA.id !== TOKEN_A_ID)) {
       resetForm();
-      if (TOKEN_A_ID) setTokenA(findToken(TOKEN_A_ID));
-      else setTokenA(null);
+      setTokenA(TOKEN_A_ID ? findToken(TOKEN_A_ID) : null);
     }
 
     if (TOKEN_B_ID && (!tokenB || tokenB.id !== TOKEN_B_ID)) {
       resetForm();
-      if (TOKEN_B_ID) setTokenB(findToken(TOKEN_B_ID));
-      else setTokenB(null);
+      setTokenB(TOKEN_B_ID ? findToken(TOKEN_B_ID) : null);
     }
 
     if (!poolTier || poolTier.id !== POOL_TIER_ID) {
-      resetForm();
       if (POOL_TIER_ID && tokenA && tokenB) {
         const tempPoolTier = findPoolTier(POOL_TIER_ID);
 
         if (tempPoolTier?.poolDayData.length) {
+          resetForm();
           setPoolTier(tempPoolTier);
           setPriceIn(tokenA);
         } else {
@@ -373,15 +576,13 @@ const CreatePosition: React.FC = () => {
     }
   }, [params]);
 
-  const [balanceTokenA, balanceTokenB] = balances;
+  React.useEffect(() => {
+    if (priceIn && poolTier) {
+      handleSetPriceRange(1);
+    }
+  }, [priceIn, poolTier]);
 
-  const { maxValue, minValue } = React.useMemo(() => {
-    const values = dataPrices.map((item) => item.field);
-    return {
-      maxValue: Math.max(...values),
-      minValue: Math.min(...values),
-    };
-  }, [dataPrices]);
+  const [balanceTokenA, balanceTokenB] = balances;
 
   return (
     <main className="flex w-full flex-col items-center">
@@ -399,7 +600,10 @@ const CreatePosition: React.FC = () => {
           </Card.Header>
           <Card.Content className="flex gap-10">
             <ListTokensDialog param={paramTokenA}>
-              <button className="flex h-11 w-full max-w-[300px] items-center justify-between rounded-lg border border-secondary-400 px-3 hover:border-primary-500/50 hover:bg-primary-500/10">
+              <button
+                className="flex h-11 w-full max-w-[300px] items-center justify-between rounded-lg border border-secondary-400 px-3 hover:border-primary-500/50 hover:bg-primary-500/10 disabled:pointer-events-none disabled:opacity-50"
+                disabled={isPending}
+              >
                 <div className="flex items-center gap-2">
                   {tokenA ? (
                     <>
@@ -418,7 +622,10 @@ const CreatePosition: React.FC = () => {
               </button>
             </ListTokensDialog>
             <ListTokensDialog param={paramTokenB}>
-              <button className="flex h-11 w-full max-w-[300px] items-center justify-between rounded-lg border border-secondary-400 px-3 hover:border-primary-500/50 hover:bg-primary-500/10">
+              <button
+                className="flex h-11 w-full max-w-[300px] items-center justify-between rounded-lg border border-secondary-400 px-3 hover:border-primary-500/50 hover:bg-primary-500/10 disabled:pointer-events-none disabled:opacity-50"
+                disabled={isPending}
+              >
                 <div className="flex items-center gap-2">
                   {tokenB ? (
                     <>
@@ -483,6 +690,7 @@ const CreatePosition: React.FC = () => {
                   <PoolItem
                     {...pool}
                     key={pool.id}
+                    disabled={isPending}
                     isActive={poolTier?.id === pool.id}
                     onClick={() => handleOnSelectPoolTier(pool.id)}
                   />
@@ -514,7 +722,11 @@ const CreatePosition: React.FC = () => {
                   <Card.Title>Select price range</Card.Title>
                   <div className="flex items-center gap-2">
                     <Typography.P className="text-sm">prices in </Typography.P>
-                    <Button variant="outlineSecondary" onClick={handleOnToggleSetPriceIn}>
+                    <Button
+                      disabled={isPending}
+                      variant="outlineSecondary"
+                      onClick={handleOnToggleSetPriceIn}
+                    >
                       <ArrowRightLeft />
                       {priceIn?.symbol}
                     </Button>
@@ -555,6 +767,7 @@ const CreatePosition: React.FC = () => {
                             <div className="mt-2 flex items-center">
                               <Button
                                 className="h-11 w-11 rounded-l-lg rounded-r-none"
+                                disabled={isPending}
                                 size="icon"
                                 variant="outlineSecondary"
                                 onClick={() => handleDecrementPrice('minPrice')}
@@ -569,12 +782,14 @@ const CreatePosition: React.FC = () => {
                                   className="rounded-none border-x-0 pb-1 pt-4"
                                   placeholder="0.0"
                                   {...field}
+                                  disabled={isPending}
                                   value={field.value}
                                   onChange={handleChange}
                                 />
                               </div>
                               <Button
                                 className="h-11 w-11 rounded-l-none rounded-r-lg"
+                                disabled={isPending}
                                 size="icon"
                                 variant="outlineSecondary"
                                 onClick={() => handleIncrementPrice('minPrice')}
@@ -603,6 +818,7 @@ const CreatePosition: React.FC = () => {
                             <div className="mt-2 flex items-center">
                               <Button
                                 className="h-11 w-11 rounded-l-lg rounded-r-none"
+                                disabled={isPending}
                                 size="icon"
                                 variant="outlineSecondary"
                                 onClick={() => handleDecrementPrice('maxPrice')}
@@ -617,12 +833,14 @@ const CreatePosition: React.FC = () => {
                                   className="rounded-none border-x-0 pb-1 pt-4"
                                   placeholder="0.0"
                                   {...field}
+                                  disabled={isPending}
                                   value={field.value}
                                   onChange={handleChange}
                                 />
                               </div>
                               <Button
                                 className="h-11 w-11 rounded-l-none rounded-r-lg"
+                                disabled={isPending}
                                 size="icon"
                                 variant="outlineSecondary"
                                 onClick={() => handleIncrementPrice('maxPrice')}
@@ -640,6 +858,7 @@ const CreatePosition: React.FC = () => {
                 <ul className="mt-2 flex w-full justify-center gap-2 p-2">
                   <li>
                     <Button
+                      disabled={isPending}
                       size="sm"
                       variant="outlineSecondary"
                       onClick={() => handleSetPriceRange(1)}
@@ -649,6 +868,7 @@ const CreatePosition: React.FC = () => {
                   </li>
                   <li>
                     <Button
+                      disabled={isPending}
                       size="sm"
                       variant="outlineSecondary"
                       onClick={() => handleSetPriceRange(1)}
@@ -658,6 +878,7 @@ const CreatePosition: React.FC = () => {
                   </li>
                   <li>
                     <Button
+                      disabled={isPending}
                       size="sm"
                       variant="outlineSecondary"
                       onClick={() => handleSetPriceRange(5)}
@@ -667,6 +888,7 @@ const CreatePosition: React.FC = () => {
                   </li>
                   <li>
                     <Button
+                      disabled={isPending}
                       size="sm"
                       variant="outlineSecondary"
                       onClick={() => handleSetPriceRange(10)}
@@ -676,6 +898,7 @@ const CreatePosition: React.FC = () => {
                   </li>
                   <li>
                     <Button
+                      disabled={isPending}
                       size="sm"
                       variant="outlineSecondary"
                       onClick={() => handleSetPriceRange(20)}
@@ -685,6 +908,7 @@ const CreatePosition: React.FC = () => {
                   </li>
                   <li>
                     <Button
+                      disabled={isPending}
                       size="sm"
                       variant="outlineSecondary"
                       onClick={handleOnClickFullPriceRange}
@@ -720,6 +944,7 @@ const CreatePosition: React.FC = () => {
                                   className="pb-1 pr-8 pt-4"
                                   placeholder="1"
                                   {...field}
+                                  disabled={isPending}
                                   value={field.value}
                                   onChange={handleChange}
                                 />
@@ -757,6 +982,7 @@ const CreatePosition: React.FC = () => {
                                 className="pb-1 pr-16 pt-4"
                                 placeholder="0.0"
                                 {...field}
+                                disabled={isPending}
                                 value={field.value}
                                 onChange={handleChange}
                               />
@@ -776,6 +1002,7 @@ const CreatePosition: React.FC = () => {
                     </Typography.P>
                     <Button
                       className="h-5 rounded-md px-2"
+                      disabled={isPending}
                       size="sm"
                       variant="outlineSecondary"
                       onClick={handleOnClickAmountAMAX}
@@ -805,6 +1032,7 @@ const CreatePosition: React.FC = () => {
                                 className="pb-1 pr-16 pt-4"
                                 placeholder="0.0"
                                 {...field}
+                                disabled={isPending}
                                 value={field.value}
                                 onChange={handleChange}
                               />
@@ -824,6 +1052,7 @@ const CreatePosition: React.FC = () => {
                     </Typography.P>
                     <Button
                       className="h-5 rounded-md px-2"
+                      disabled={isPending}
                       size="sm"
                       variant="outlineSecondary"
                       onClick={handleOnClickAmountBMAX}
@@ -847,8 +1076,8 @@ const CreatePosition: React.FC = () => {
                     <Card.Title>MIN prices</Card.Title>
                   </Card.Header>
                   <Card.Content>
-                    <Typography.P>{`- 0.00000 ${tokenA?.symbol}`}</Typography.P>
-                    <Typography.P>{`- 0.00000 ${tokenB?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${form.watch('minPrice')} ${tokenA?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${form.watch('minPrice')} ${tokenB?.symbol}`}</Typography.P>
                   </Card.Content>
                 </Card>
                 <Card className="max-w-fit bg-black">
@@ -856,8 +1085,8 @@ const CreatePosition: React.FC = () => {
                     <Card.Title>MAX prices</Card.Title>
                   </Card.Header>
                   <Card.Content>
-                    <Typography.P>{`- 0.00000 ${tokenA?.symbol}`}</Typography.P>
-                    <Typography.P>{`- 0.00000 ${tokenB?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${form.watch('maxPrice')} ${tokenA?.symbol}`}</Typography.P>
+                    <Typography.P>{`- ${form.watch('maxPrice')} ${tokenB?.symbol}`}</Typography.P>
                   </Card.Content>
                 </Card>
                 <Card className="max-w-fit bg-black">
@@ -877,17 +1106,34 @@ const CreatePosition: React.FC = () => {
                   </Button>
                 ) : (
                   <div className="space-x-4">
-                    {!tokenA?.isNative ? (
-                      <Button variant="outline">{`Approve ${tokenA?.symbol}`}</Button>
+                    {!isAllowanceA ? (
+                      <Button
+                        disabled={isPending}
+                        variant="outline"
+                        onClick={handleOnClickApproveAmountA}
+                      >
+                        {isPendingApproveTokenA ? <TypingLoader /> : `Approve ${tokenA?.symbol}`}
+                      </Button>
                     ) : null}
-                    {!tokenB?.isNative ? (
-                      <Button variant="outline">{`Approve ${tokenB?.symbol}`}</Button>
+                    {!isAllowanceB ? (
+                      <Button
+                        disabled={isPending}
+                        variant="outline"
+                        onClick={handleOnClickApproveAmountB}
+                      >
+                        {isPendingApproveTokenB ? <TypingLoader /> : `Approve ${tokenB?.symbol}`}
+                      </Button>
                     ) : null}
                     <Button
+                      disabled={!isAllowanceA || !isAllowanceB || isPending}
                       variant="outline"
-                      onClick={() => form.handleSubmit(handleOnSubmitAddLiquidity)()}
+                      onClick={() => form.handleSubmit(handleOnSubmitMint)()}
                     >
-                      {`Initiate ${tokenA?.symbol}/${tokenB?.symbol} position`}
+                      {isPendingMint ? (
+                        <TypingLoader />
+                      ) : (
+                        `Initiate ${tokenA?.symbol}/${tokenB?.symbol} position`
+                      )}
                     </Button>
                   </div>
                 )}
